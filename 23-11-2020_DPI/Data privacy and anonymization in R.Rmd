@@ -1,0 +1,329 @@
+---
+title: "Dati personali e informazioni sensibili: tecniche di anonimizzazione in R"
+author: "Giovanna de Vincenzo"
+date: "23/11/2020"
+output:
+  html_document:
+    toc: true
+    theme: united
+---
+
+# Anonimizzare dati contenenti Personally Identifiable Information (PII)
+
+Questa funzionalità consente agli utenti di anonimizzare rapidamente e facilmente i dati contenenti *informazioni di identificazione personale (PII)* tramite funzioni utili.
+
+*anonymizer* rende anonimi i dati contenenti informazioni di identificazione personale (PII) utilizzando una combinazione di tecniche di **salting** e **hashing**.
+
+Puoi trovare esempi di qualità di anonimizzazione dei dati in R [qui](http://jangorecki.github.io/blog/2014-11-07/Data-Anonymization-in-R.html) e [qui](https://stackoverflow.com/questions/10454973/how-to-create-example-data-set-from-private-data-replacing-variable-names-and-l).
+
+## Installazione
+
+E' possibile installare:
+
+* l'ultimo rilascio CRAN
+
+```{r cran, warning=FALSE}
+#install.packages("anonymizer")
+```
+
+
+* l'ultima versione di sviluppo da github
+
+```{r github, warning=FALSE}
+#if (packageVersion("devtools") < 1.6) {
+#   install.packages("devtools")
+# }
+# devtools::install_github("paulhendricks/anonymizer")
+```
+
+## LIBRARY(ANONYMIZER)
+
+$anonymzer$ utilizza 4 funzioni principali: salt, unsalt, hash, and anonymize.
+
+```{r anonymzer function}
+library(dplyr, warn.conflicts = FALSE)
+library(anonymizer)
+
+letters %>% head
+```
+
+> Salt: *In crittografia, un salt è una sequenza casuale di bit utilizzata assieme ad una password come input a una funzione unidirezionale, di solito una funzione hash, il cui output è conservato al posto della sola password, e può essere usato per autenticare gli utenti*
+
+```{r salt}
+#?salt
+
+letters %>% head %>% salt(.seed = 1)
+```
+
+> Unsalt:
+
+```{r unsalt}
+#?unsult
+
+letters %>% head %>% salt(.seed = 1) %>% unsalt(.seed = 1)
+```
+
+> Hash: *Una funzione hash è una funzione che a fronte di una stringa arbitraria di ingresso fornisce in uscita una stringa di lunghezza fissa la cui dimensione è funzione dell’algoritmo utilizzato*
+
+```{r hash}
+#?hash
+
+letters %>% head %>% hash(.algo = "crc32")
+```
+
+```{r salt+hash}
+letters %>% head %>% salt(.seed = 1) %>% hash(.algo = "crc32")
+```
+
+> Anonymize: *anonymize anonymizes a vector .x by first salting it with salt and then hashing it with hash*
+
+```{r anonymize crc32}
+#?anonymize
+letters %>% head %>% anonymize(.algo = "crc32", .seed = 1)
+```
+
+## Falsi PII
+
+Generiamo un dataset con fake PII
+
+```{r plot PII}
+library(generator)
+n <- 6
+set.seed(1)
+ashley_madison <- 
+  data.frame(nome = r_full_names(n), 
+             idcard = r_national_identification_numbers(n), 
+             datanascita = r_date_of_births(n), 
+             email = r_email_addresses(n), 
+             ip = r_ipv4_addresses(n), 
+             tel = r_phone_numbers(n), 
+             credit_card = r_credit_card_numbers(n), 
+             lat = r_latitudes(n), 
+             lon = r_longitudes(n), 
+             stringsAsFactors = FALSE)
+knitr::kable(ashley_madison, format = "markdown")
+```
+
+## Detect PII
+
+Il pacchetto ['detector'](https://www.rdocumentation.org/packages/detector/versions/0.1.0) individua i seguenti PII in un dataset
+
+* Full name
+* Home address
+* E-mail address
+* National identification number
+* Passport number
+* Social Security number
+* IP address
+* Vehicle registration plate number
+* Driver's license number
+* Credit card number
+* Date of birth
+* Birthplace
+* Telephone number
+* Latitude and longtiude
+
+```{r detect data}
+library(detector)
+ashley_madison %>% 
+  detect %>% 
+  knitr::kable(format = "markdown")
+```
+
+
+## Anonymize PII
+
+```{r anonymize data, warning=FALSE}
+ashley_madison[] <- lapply(ashley_madison, anonymize, .algo = "crc32")
+ashley_madison %>% 
+  knitr::kable(format = "markdown")
+```
+
+> [Paul Hendricks (2015). anonymizer: Anonymize Data Containing Personally Identifiable Information. R package version 0.2.0](https://github.com/paulhendricks/anonymizer)
+
+
+# CASO D'USO: SURVEY
+
+```{r dependecies, include=FALSE}
+suppressPackageStartupMessages({
+  library(data.table)
+  library(digest)
+  library(knitr)
+  library(readr)
+})
+```
+
+Obiettivo: anonimizzare le informazioni sensibili nei dati del sondaggio e memorizzare i dati in una singola tabella.
+
+```{r import csv, include=FALSE}
+SURV <- read_delim("survey.csv", ";", escape_double = FALSE, 
+    trim_ws = TRUE)
+SURV <- data.table(SURV)
+```
+
+
+```{r head survey data, include=FALSE}
+kable(head(SURV))
+```
+
+## Anonymize function
+
+La funzione calcolerà gli hash solo per input univoci e restituirà il vettore di input mascherati.
+La mia versione userà digest (x, algo = "crc32") perché si adatta meglio alle tabelle html, algo crc32 non è veramente sicuro.
+
+
+?digest per verificare gli algo disponibili
+
+
+Hint: utilizzare la funzione salt sul vettore di input, **e.g. x=paste0("prefix",x,"suffix")**
+
+```{r, warning=FALSE}
+anonymize <- function(x, algo="crc32"){
+  unq_hashes <- vapply(unique(x), function(object) digest(object, algo=algo), FUN.VALUE="", USE.NAMES=TRUE)
+  unname(unq_hashes[x])
+  }
+
+```
+
+## Anonymize survey data
+
+Il campo città e genere non saranno oscurati
+
+```{r new data masked, warning=FALSE}
+# choose columns to mask
+cols_to_mask <- c("nome","indirizzo","email", "cap")
+# backup original data
+SURV_ORG <- copy(SURV)
+# anonymize
+SURV[,cols_to_mask := lapply(.SD , anonymize), .SDcols = cols_to_mask, with=FALSE]
+
+kable(head(SURV))
+```
+
+```{r medie}
+SURV[,.(.N,eta_media=mean(eta), punteggio_medio = mean(punteggio)),by=.(livello)
+         ][,kable(.SD)]
+```
+## Perchè non generare dati random o sequenze di integer? 
+
+Quando usiamo la funzione digest per nascondere i dati sensibili dobbiamo assicurarci di:
+
+* ricondurre i dati aggregati masked alle colonne originali
+
+```{r riconduzione 1}
+SURV_ORG[,.(.N,eta_media=mean(eta), punteggio_medio = mean(punteggio)),by=.(citta,cap,livello)
+         ][,kable(.SD)]
+```
+
+```{r riconduzione 2}
+SURV[,.(.N,eta_media=mean(eta), punteggio_medio = mean(punteggio)),by=.(citta,cap,livello)
+     ][,kable(.SD)]
+```
+
+* mantere le relazioni
+
+*if t1.col1 == t2.col4 TRUE then also digest(t1.col1) == digest(t2.col4) TRUE*
+
+
+## Esempio su dati di vendita
+
+Rendiamo anonimi dati di vendita delle tabelle VENDITE e CLIENTI
+
+```{r dati fake, include=FALSE}
+VENDITE <- 
+  data.table(
+    cliente = c("CUST1", "CUST2", "CUST3", "CUST4", "CUST5", "CUST6", "CUST9"),
+    prodotto	= c("rgr", "jfc", "hnm", "zgm", "pwr", "rsq", "ggp"),
+    data	= c("2019-10-28", "2019-10-13", "2019-11-06", "2019-11-04", "2014-11-04", "2019-11-08", "2019-11-05"),
+    quantita	= c(3, 4, 1, 5, 8, 2, 1),
+    euro = c(61, 58, 20, 76, 100, 40, 20)
+    )
+
+CLIENTI <- 
+  data.table(
+    cliente = c("CUST1", "CUST2", "CUST3", "CUST4", "CUST5", "CUST6", "CUST9"),
+    citta	= c("Bari", "Molfetta", "Giovinazzo", "Trani", "Bisceglie", "Polignano", "Monopoli"),
+    CAP	= c("70125", "70056", "70054", "70066", "70053", "80120", "80130"),
+    indirizzo	= c("via argiro", "via baccarini","via coperinico", "via falcone borsellino", "via petrarca", "viale einaudi", "Piazza della Libertà "),
+    nome = c("Giovanni", "Francesco", "Paola", "Manuela", "Isa", "Michele", "Sara"),
+    eta = c(23, 41, 55, 40, 34, 61, 33), 
+    sesso = c("M", "M", "F", "F", "F", "M", "F")
+    )
+```
+
+
+```{r sales}
+kable(head(VENDITE,4))
+```
+
+```{r customer}
+kable(head(CLIENTI,2))
+```
+
+```{r join}
+setkey(CLIENTI,cliente)
+setkey(VENDITE,cliente)
+kable(head(CLIENTI[VENDITE]))
+```
+
+```{r join and aggregate}
+setkey(CLIENTI,cliente)
+setkey(VENDITE,cliente)
+kable(head(
+  CLIENTI[VENDITE][,.(quantita = sum(quantita), euro = sum(euro)), by=.(citta, CAP)]
+))
+```
+
+## Anonimizzare dati di vendita
+
+```{r dati di vendita, warning=FALSE}
+setkey(CLIENTI,cliente)
+setkey(VENDITE,cliente)
+
+VENDITE[, cliente := anonymize(cliente)]
+cols_to_mask <- c("cliente","nome","indirizzo")
+CLIENTI[,cols_to_mask := lapply(.SD, anonymize),.SDcols=cols_to_mask, with=FALSE]
+setkey(CLIENTI,cliente)
+# preview result
+kable(head(CLIENTI,2))
+
+```
+
+```{r preview result 2}
+setkey(CLIENTI,cliente)
+setkey(VENDITE,cliente)
+kable(head(VENDITE,2))
+```
+
+Anche con le colonne mascherate sarà possibile andare in join correttamente
+
+```{r join correctly}
+setkey(CLIENTI,cliente)
+setkey(VENDITE,cliente)
+kable(head(CLIENTI[VENDITE]))
+```
+
+e anche gli aggregati sulle colonne mascherate corrisponderanno agli originali
+
+```{r match to the origin}
+setkey(CLIENTI,cliente)
+setkey(VENDITE,cliente)
+kable(head(
+    CLIENTI[VENDITE][,.(quantita = sum(quantita), euro = sum(euro)), by=.(citta,CAP)]
+))
+
+```
+
+## Funzione su survey
+
+Esempio di script semplice e veloce per anonimizzare i dati
+
+```{r script minimale, warning=FALSE}
+anonymize <- function(x, algo="crc32"){
+  unq_hashes <- vapply(unique(x), function(object) digest(object, algo=algo), FUN.VALUE="", USE.NAMES=TRUE)
+  unname(unq_hashes[x])
+}
+cols_to_mask <- c("nome","indirizzo","cap", "email")
+kable(head(SURV_ORG[, cols_to_mask := lapply(.SD, anonymize), .SDcols=cols_to_mask, with=FALSE][]))
+
+```
